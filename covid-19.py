@@ -1,156 +1,103 @@
-# ----------------------------- #
-# COVID-19 Dashboard v1.0       #
-# Copyright (c) 2021 miniprime1 #
-#                               #
-# Referenced: bit.ly/2Oi3Urq    #
-# License: bit.ly/3b3qkFl       #
-# Language: Python 3.7.8        #
-# OS: Windows, MacOS, Linux     #
-# ----------------------------- #
+# Name: COVID-19 Dashboard v1.0       
+# Referenc: bit.ly/2Oi3Urq    
+# License: bit.ly/3b3qkFl       
+# Language: Python 3.7.8        
+# OS: Windows, MacOS, Linux 
 
 import requests
+from bs4 import BeautifulSoup
 from pydantic import *
+from decimal import *
 
-JOHN_HOPKINS = "john_hopkins"
-SOURCES = [JOHN_HOPKINS]
+WORLDOMETERS = "worldometers"
+SOURCE = WORLDOMETERS
+URL = "https://www.worldometers.info/coronavirus/"
 
 def install_requirements():
-    import os
-    os.system("python -m pip install pydantic")
-    os.system("python3 -m pip install pydantic")
-    os.system("clear")
+    import sys, os
+    for i in ["pydantic", "requests", "beautifulsoup4"]:
+        os.system(f"{sys.executable} -m pip install {i}")
 
 class CovidModel(BaseModel):
-    id: str = Field(..., alias="OBJECTID")
-    country: str = Field(..., alias="Country_Region")
-    confirmed: int = Field(0, alias="Confirmed")
-    active: int = Field(0, alias="Active")
-    deaths: int = Field(0, alias="Deaths")
-    recovered: int = Field(None, alias="Recovered")
-    latitude: float = Field(None, alias="Lat")
-    longitude: float = Field(None, alias="Long_")
-    last_update: int = Field(0, alias="Last_Update")
-
-
-class CountryModel(BaseModel):
-
-    id: str = Field(..., alias="OBJECTID")
-    name: str = Field(..., alias="Country_Region")
-
-BASE_URL = "https://services1.arcgis.com"
-PATH = ("/0MSEUqKaxRlEPj5g/arcgis/rest/services/ncov_cases/FeatureServer/2/query")
-URL = BASE_URL + PATH
-SOURCE = JOHN_HOPKINS
-
+    country: str = Field(..., alias="Country,Other")
+    total_cases: int = Field(0, alias="TotalCases")
+    confirmed: int = Field(0, alias="TotalCases")
+    new_cases: int = Field(0, alias="NewCases")
+    deaths: int = Field(0, alias="TotalDeaths")
+    new_deaths: int = Field(0, alias="NewDeaths")
+    recovered: int = Field(0, alias="TotalRecovered")
+    active: int = Field(0, alias="ActiveCases")
+    active_cases: int = Field(0, alias="ActiveCases")
+    critical: int = Field(0, alias="Serious,Critical")
+    total_tests: int = Field(0, alias="TotalTests")
+    total_tests_per_million: Decimal = Field(Decimal(0), alias="Tests/1M pop")
+    total_cases_per_million: Decimal = Field(Decimal(0), alias="TotCases/1M pop")
+    total_deaths_per_million: Decimal = Field(Decimal(0), alias="Deaths/1M pop")
+    population: Decimal = Field(Decimal(0), alias="Population")
 
 class Covid:
     def __init__(self):
+        self.__url = URL
+        self.__data = {}
+        self.__fetch()
+        self.__set_data()
         self.source = SOURCE
 
-    @staticmethod
-    def __get_total_cases_by_country_id(object_id: str) -> dict:
-        params = dict(
-            f="json",
-            where=f"OBJECTID = {object_id}",
-            returnGeometry="false",
-            spatialRel="esriSpatialRelIntersects",
-            outFields="*",
-            resultOffset="0",
-            resultRecordCount="1",
-            cacheHint="true",
-        )
-        response = requests.get(URL, params=params).json()
-        try:
-            return response["features"][0]["attributes"]
-        except KeyError:
-            raise Exception(response)
+    def __fetch(self):
+        response = requests.get(self.__url)
+        soup = BeautifulSoup(response.text, "html.parser")
+        table = soup.find("table", attrs={"class": "main_table_countries"})
+        headers = table.find_all("th")
+        self.__headers = [header.text.replace("\xa0", "") for header in headers]
+        self.__rows = table.tbody.find_all("tr")
+        self.__total_cases = soup.find_all("div", attrs={"class": "maincounter-number"})
 
-    def __get_total_by_case(self, case: str) -> int:
-        params = dict(
-            f="json",
-            where="Confirmed > 0",
-            returnGeometry="false",
-            spatialRel="esriSpatialRelIntersects",
-            outFields="*",
-            outStatistics=str(
-                [
-                    {
-                        "statisticType": "sum",
-                        "onStatisticField": f"{case}",
-                        "outStatisticFieldName": "value",
-                    }
-                ]
-            ),
-            cacheHint="true",
-        )
-        response = requests.get(URL, params=params).json()
-        try:
-            return response["features"][0]["attributes"]["value"]
-        except KeyError:
-            raise Exception(response)
+    def __set_data(self):
+        countries = ([attr.text.strip() for attr in row if attr != "\n"] for row in self.__rows)
+        self.__data = {country[1].lower(): country for country in countries}
 
-    def __get_all_cases(self) -> list:
-        params = dict(
-            f="json",
-            where="Confirmed > 0",
-            returnGeometry="false",
-            spatialRel="esriSpatialRelIntersects",
-            outFields="*",
-            orderByFields="Confirmed desc",
-            resultOffset="0",
-            resultRecordCount="200",
-            cacheHint="true",
-        )
-        response = requests.get(URL, params=params).json()
-        try:
-            return response["features"]
-        except KeyError:
-            raise Exception(response)
+    def __format(self, _list: list) -> list:
+        _list = [val.strip().replace(",", "") for val in _list]
+        return [val if val and val != "N/A" else 0 for val in _list]
 
     def get_data(self) -> list:
-        cases = self.__get_all_cases()
-        return [CovidModel(**case["attributes"]).dict() for case in cases]
+        return [CovidModel(**dict(zip(self.__headers, self.__format(val)))).dict() for val in self.__data.values()]
 
-    def get_total_active_cases(self) -> int:
-        return self.__get_total_by_case("Active")
-
-    def get_total_deaths(self) -> int:
-        return self.__get_total_by_case("Deaths")
-
-    def get_total_confirmed_cases(self) -> int:
-        return self.__get_total_by_case("Confirmed")
-
-    def get_total_recovered(self) -> int:
-        return self.__get_total_by_case("Recovered")
+    def get_status_by_country_name(self, country_name: str) -> dict:
+        try: country_data = dict(zip(self.__headers, self.__format(self.__data[country_name.lower()]),))
+        except KeyError: raise ValueError( f"There is no country called '{country_name}', to check available country names use `list_countries()`")
+        return CovidModel(**country_data).dict()
 
     def list_countries(self) -> list:
-        cases = self.__get_all_cases()
-        return [CountryModel(**case["attributes"]).dict() for case in cases]
+        return list(self.__data.keys())
 
-    def get_status_by_country_id(self, country_id) -> dict:
-        case = self.__get_total_cases_by_country_id(country_id)
-        return CovidModel(**case).dict()
+    @staticmethod
+    def __to_num(string: str) -> int:
+        return int(string.strip().replace(",", ""))
 
-    def get_status_by_country_name(self, country_name) -> dict:
-        country = filter(
-            lambda country: country["name"].lower() == country_name.lower(),
-            self.list_countries(),
-        )
-        try:
-            country = next(country)
-        except StopIteration:
-            raise ValueError(
-                f"There is no country called '{country_name}', to check available country names use `list_countries()`"
-            )
-        case = self.__get_total_cases_by_country_id(country["id"])
-        return CovidModel(**case).dict()
+    def get_total_confirmed_cases(self) -> int:
+        return self.__to_num(self.__total_cases[0].span.text)
+
+    def get_total_deaths(self) -> int:
+        return self.__to_num(self.__total_cases[1].span.text)
+
+    def get_total_recovered(self) -> int:
+        return self.__to_num(self.__total_cases[2].span.text)
+
+    def get_total_active_cases(self) -> int:
+        confirmed = self.get_total_confirmed_cases()
+        deaths = self.get_total_deaths()
+        recovered = self.get_total_recovered()
+        return confirmed - (recovered + deaths)
 
 if __name__ == '__main__':
     confirmed = Covid().get_total_confirmed_cases()
     deaths = Covid().get_total_deaths()
     recovered = Covid().get_total_recovered()
+
     print("COVID-19 Dashboard v1.0")
     print("Copyright (c) 2020 miniprime1\n")
+
     print("[Worldwide]")
     print("Confirmed:", confirmed)
     print("Deaths:", deaths)
